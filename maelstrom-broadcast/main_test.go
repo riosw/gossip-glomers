@@ -2,9 +2,10 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
-	"log"
+
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTopologyType(t *testing.T) {
@@ -17,22 +18,8 @@ func TestTopologyType(t *testing.T) {
 
 	var topology = body["topology"].(map[string]interface{})
 
-	log.Default().Printf("Type of topology[\"n0\"] is: %T\n", topology["n0"])
+	neighbors = getNeighborsFromTopology("n0", topology)
 
-	n0Topology := topology["n0"].([]interface{})
-
-	s := make([]string, len(n0Topology))
-	for i, v := range n0Topology {
-		s[i] = fmt.Sprint(v)
-	}
-
-	var neighbors []string = s
-
-	log.Default().Println("Topology has been set: ", topology)
-	log.Default().Println("Neighbors has been set: ", neighbors)
-
-	for i, v := range neighbors {
-		log.Default().Printf("Neighbor #%d is: %s\n", i, v)
-	}
+	assert.Equal(t, []string{"n3", "n1"}, neighbors)
 
 }
