@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"testing"
 
@@ -21,5 +22,18 @@ func TestTopologyType(t *testing.T) {
 	neighbors = getNeighborsFromTopology("n0", topology)
 
 	assert.Equal(t, []string{"n3", "n1"}, neighbors)
+
+}
+
+func TestSlices(t *testing.T) {
+	neighbors := []string{"n0", "n1"}
+	unacked := make([]string, len(neighbors))
+
+	if len := copy(unacked, neighbors); len != 2 {
+		t.Fatalf("wrong length. expected:%d, got:%d", 2, len)
+	}
+
+	fmt.Printf("unacked: %v\n", unacked)
+	assert.Equal(t, []string{"n0", "n1"}, neighbors)
 
 }
