@@ -38,15 +38,18 @@ func main() {
 
 			copy(unacked, neighbors)
 
-			unacked = removeElement(unacked, msg.Src)
+			var muUnacked sync.Mutex
+
+			unacked = removeElement(unacked, msg.Src, &muUnacked)
 
 			// log.Default().Printf("unacked: %v", unacked)
 
 			done := make(chan error)
 
+			start := time.Now()
 			go func() {
-				for {
-					// log.Default().Printf("Trying sending message %d ... to nodes %v", message, unacked)
+				// log.Default().Printf("Trying sending message %d ... to nodes %v", message, unacked)
+				for len(unacked) > 0 {
 					for _, dest := range unacked {
 						err := n.RPC(dest, body, func(msg maelstrom.Message) error {
 							var body map[string]any
@@ -60,7 +63,8 @@ func main() {
 									return fmt.Errorf("WARN: Unexpected type value, got: %s", val)
 								} else {
 									// Don't retry this anymore
-									unacked = removeElement(unacked, dest)
+									unacked = removeElement(unacked, dest, &muUnacked)
+
 									if len(unacked) == 0 {
 										done <- nil
 									}
@@ -75,12 +79,20 @@ func main() {
 							done <- err
 						}
 					}
-					// Avoid retrying too quickly
-					time.Sleep(1 * time.Second)
+					time.Sleep(500 * time.Millisecond)
 				}
 			}()
 
-			<-done
+			var err = <-done
+			if err != nil {
+				return err
+			} else {
+				t := time.Now()
+				elapsed := t.Sub(start)
+				log.Default().Printf("Broadcasting message %d to nodes %s takes %s",
+					message, neighbors, elapsed)
+			}
+
 		}
 		return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
 	})
@@ -154,7 +166,9 @@ func getNeighborsFromTopology(nodeID string, topology map[string]interface{}) []
 	return nodeNeighbors
 }
 
-func removeElement(slice []string, element string) []string {
+func removeElement(slice []string, element string, mu *sync.Mutex) []string {
+	mu.Lock()
+	defer mu.Unlock()
 	index := -1
 	for i, val := range slice {
 		if val == element {
