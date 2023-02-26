@@ -35,5 +35,9 @@ func TestSlices(t *testing.T) {
 
 	fmt.Printf("unacked: %v\n", unacked)
 	assert.Equal(t, []string{"n0", "n1"}, neighbors)
+	assert.Equal(t, []string{"n0", "n1"}, unacked)
 
+	unacked = removeElement(unacked, "n0")
+	assert.Equal(t, []string{"n0", "n1"}, neighbors)
+	assert.Equal(t, []string{"n1"}, unacked)
 }

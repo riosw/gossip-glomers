@@ -4,13 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
+	"github.com/emirpasic/gods/sets/hashset"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 var neighbors []string
-var state []int
+var state = hashset.New()
+var mu sync.Mutex
 
 func main() {
 	n := maelstrom.NewNode()
@@ -28,52 +31,57 @@ func main() {
 		}
 		var message int = int(body["message"].(float64))
 
-		if isInState(message) {
+		if ok := appendIfNotInState(message); !ok {
 			log.Printf("Message %d already exist inside state", message)
 		} else {
-			state = append(state, message)
-
 			unacked := make([]string, len(neighbors))
 
 			copy(unacked, neighbors)
 
 			unacked = removeElement(unacked, msg.Src)
 
-			log.Default().Printf("unacked: %v", unacked)
+			// log.Default().Printf("unacked: %v", unacked)
 
-			for len(unacked) > 0 {
-				log.Default().Printf("Trying sending message %d ... to nodes %v", message, unacked)
-				for _, dest := range unacked {
-					err := n.RPC(dest, body, func(msg maelstrom.Message) error {
-						var body map[string]any
+			done := make(chan error)
 
-						if err := json.Unmarshal(msg.Body, &body); err != nil {
-							return err
-						}
+			go func() {
+				for {
+					// log.Default().Printf("Trying sending message %d ... to nodes %v", message, unacked)
+					for _, dest := range unacked {
+						err := n.RPC(dest, body, func(msg maelstrom.Message) error {
+							var body map[string]any
 
-						if val, ok := body["type"]; ok {
-							if val != "broadcast_ok" {
-								return fmt.Errorf("WARN: Unexpected type value, got: %s", val)
-							} else {
-								// Don't retry this anymore
-								unacked = removeElement(unacked, dest)
+							if err := json.Unmarshal(msg.Body, &body); err != nil {
+								return err
 							}
-						} else {
-							return fmt.Errorf("WARN: `type` not found on message body")
+
+							if val, ok := body["type"]; ok {
+								if val != "broadcast_ok" {
+									return fmt.Errorf("WARN: Unexpected type value, got: %s", val)
+								} else {
+									// Don't retry this anymore
+									unacked = removeElement(unacked, dest)
+									if len(unacked) == 0 {
+										done <- nil
+									}
+								}
+							} else {
+								return fmt.Errorf("WARN: `type` not found on message body")
+							}
+
+							return nil
+						})
+						if err != nil {
+							done <- err
 						}
-
-						return nil
-					})
-					if err != nil {
-						return err
 					}
+					// Avoid retrying too quickly
+					time.Sleep(1 * time.Second)
 				}
-				// Avoid retrying too quickly
-				time.Sleep(1 * time.Second)
-			}
+			}()
 
+			<-done
 		}
-
 		return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
 	})
 
@@ -85,7 +93,7 @@ func main() {
 		}
 
 		body["type"] = "read_ok"
-		body["messages"] = state
+		body["messages"] = state.Values()
 
 		return n.Reply(msg, body)
 	})
@@ -108,13 +116,23 @@ func main() {
 	}
 }
 
-func isInState(message int) bool {
-	for _, v := range state {
-		if v == message {
-			return true
-		}
+func isInState(msg int) bool {
+	return state.Contains(msg)
+}
+
+func appendToState(msg int) {
+	state.Add(msg)
+}
+
+func appendIfNotInState(msg int) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if !isInState(msg) {
+		appendToState(msg)
+		return true
+	} else {
+		return false
 	}
-	return false
 }
 
 // The topology type of map[string]interface{} comes from `json.Unmarshal`.
