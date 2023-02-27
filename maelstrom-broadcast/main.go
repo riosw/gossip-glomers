@@ -57,7 +57,7 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 	var message int = int(body["message"].(float64))
 
 	if ok := n.state.appendIfNotExist(message); !ok {
-		fmt.Fprintf(os.Stderr, "Message %d already exist inside state", message)
+		fmt.Fprintf(os.Stderr, "Message %d already exist inside state\n", message)
 	}
 
 	unacked := make([]string, len(n.neighbors))
@@ -78,14 +78,14 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 
 					if val, ok := body["type"]; ok {
 						if val != "broadcast_ok" {
-							return fmt.Errorf("WARN: Unexpected type value, got: %s", val)
+							return fmt.Errorf("WARN: Unexpected type value, got: %s\n", val)
 						} else {
 							// Don't retry this anymore
 							unacked = removeElement(unacked, dest, &muUnacked)
 
 						}
 					} else {
-						return fmt.Errorf("WARN: `type` not found on message body")
+						return fmt.Errorf("WARN: `type` not found on message body\n")
 					}
 
 					return nil
@@ -159,7 +159,7 @@ func getNeighborsFromTopology(nodeID string, topology map[string]interface{}) []
 	}
 
 	fmt.Fprintln(os.Stderr, "Received topology: ", topology)
-	fmt.Fprintf(os.Stderr, "Neighbors of node %s are: %v", nodeID, nodeNeighbors)
+	fmt.Fprintf(os.Stderr, "Neighbors of node %s are: %v\n", nodeID, nodeNeighbors)
 
 	return nodeNeighbors
 }
