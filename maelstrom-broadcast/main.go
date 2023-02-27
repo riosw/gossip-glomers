@@ -12,7 +12,7 @@ import (
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
-var rpcSleepTime = 10000 * time.Millisecond
+var rpcSleepTime = 1000 * time.Millisecond
 
 type Node struct {
 	server    *maelstrom.Node
