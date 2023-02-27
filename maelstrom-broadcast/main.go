@@ -12,122 +12,133 @@ import (
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
-var neighbors []string
-var state = hashset.New()
-var rwmu sync.RWMutex
 var rpcSleepTime = 10000 * time.Millisecond
 
+type Node struct {
+	server    *maelstrom.Node
+	neighbors []string
+	state     *State
+}
+
+type State struct {
+	set  hashset.Set
+	rwmu sync.RWMutex
+}
+
 func main() {
-	n := maelstrom.NewNode()
+	n := Node{
+		server:    maelstrom.NewNode(),
+		neighbors: []string{},
+		state: &State{
+			set: *hashset.New(),
+		},
+	}
 
 	// TODO: add something like this
 	// accumulated_time_to_check_state
 	// Everytime isInState called, sum them
 	// defer so that on application exit, logs the time lost for deduplication
 
-	n.Handle("broadcast", func(msg maelstrom.Message) error {
-		var body map[string]any
+	n.server.Handle("broadcast", n.broadcastHandler)
+	n.server.Handle("read", n.readHandler)
+	n.server.Handle("topology", n.topologyHandler)
 
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-		var message int = int(body["message"].(float64))
-
-		if ok := appendIfNotInState(message); !ok {
-			fmt.Fprintf(os.Stderr, "Message %d already exist inside state", message)
-		}
-		unacked := make([]string, len(neighbors))
-
-		copy(unacked, neighbors)
-
-		var muUnacked sync.Mutex
-
-		unacked = removeElement(unacked, msg.Src, &muUnacked)
-
-		// log.Default().Printf("unacked: %v", unacked)
-
-		go func() {
-			// log.Default().Printf("Trying sending message %d ... to nodes %v", message, unacked)
-			for len(unacked) > 0 {
-				for _, dest := range unacked {
-					err := n.RPC(dest, body, func(msg maelstrom.Message) error {
-						var body map[string]any
-
-						if err := json.Unmarshal(msg.Body, &body); err != nil {
-							return err
-						}
-
-						if val, ok := body["type"]; ok {
-							if val != "broadcast_ok" {
-								return fmt.Errorf("WARN: Unexpected type value, got: %s", val)
-							} else {
-								// Don't retry this anymore
-								unacked = removeElement(unacked, dest, &muUnacked)
-
-							}
-						} else {
-							return fmt.Errorf("WARN: `type` not found on message body")
-						}
-
-						return nil
-					})
-					if err != nil {
-						log.Fatalf("Unexpected Error on RPC: %v", err)
-					}
-				}
-				time.Sleep(rpcSleepTime)
-			}
-		}()
-
-		return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
-	})
-
-	n.Handle("read", func(msg maelstrom.Message) error {
-		var body map[string]any
-
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-
-		body["type"] = "read_ok"
-		rwmu.RLock()
-		body["messages"] = state.Values()
-		rwmu.RUnlock()
-
-		return n.Reply(msg, body)
-	})
-
-	n.Handle("topology", func(msg maelstrom.Message) error {
-		var body map[string]any
-
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
-
-		var topology = body["topology"].(map[string]interface{})
-		neighbors = getNeighborsFromTopology(n.ID(), topology)
-
-		return n.Reply(msg, map[string]string{"type": "topology_ok"})
-	})
-
-	if err := n.Run(); err != nil {
+	if err := n.server.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func isInState(msg int) bool {
-	return state.Contains(msg)
+func (n *Node) broadcastHandler(msg maelstrom.Message) error {
+	var body map[string]any
+
+	if err := json.Unmarshal(msg.Body, &body); err != nil {
+		return err
+	}
+	var message int = int(body["message"].(float64))
+
+	if ok := n.state.appendIfNotExist(message); !ok {
+		fmt.Fprintf(os.Stderr, "Message %d already exist inside state", message)
+	}
+
+	unacked := make([]string, len(n.neighbors))
+	copy(unacked, n.neighbors)
+
+	var muUnacked sync.Mutex
+	unacked = removeElement(unacked, msg.Src, &muUnacked)
+
+	go func() {
+		for len(unacked) > 0 {
+			for _, dest := range unacked {
+				err := n.server.RPC(dest, body, func(msg maelstrom.Message) error {
+					var body map[string]any
+
+					if err := json.Unmarshal(msg.Body, &body); err != nil {
+						return err
+					}
+
+					if val, ok := body["type"]; ok {
+						if val != "broadcast_ok" {
+							return fmt.Errorf("WARN: Unexpected type value, got: %s", val)
+						} else {
+							// Don't retry this anymore
+							unacked = removeElement(unacked, dest, &muUnacked)
+
+						}
+					} else {
+						return fmt.Errorf("WARN: `type` not found on message body")
+					}
+
+					return nil
+				})
+				if err != nil {
+					log.Fatalf("Unexpected Error on RPC: %v", err)
+				}
+			}
+			time.Sleep(rpcSleepTime)
+		}
+	}()
+
+	return n.server.Reply(msg, map[string]string{"type": "broadcast_ok"})
 }
 
-func appendToState(msg int) {
-	state.Add(msg)
+func (n *Node) readHandler(msg maelstrom.Message) error {
+	var body map[string]any
+
+	if err := json.Unmarshal(msg.Body, &body); err != nil {
+		return err
+	}
+
+	body["type"] = "read_ok"
+	body["messages"] = n.getStateValues()
+
+	return n.server.Reply(msg, body)
 }
 
-func appendIfNotInState(msg int) bool {
-	rwmu.Lock()
-	defer rwmu.Unlock()
-	if !isInState(msg) {
-		appendToState(msg)
+func (n *Node) topologyHandler(msg maelstrom.Message) error {
+	var body map[string]any
+
+	if err := json.Unmarshal(msg.Body, &body); err != nil {
+		return err
+	}
+
+	var topology = body["topology"].(map[string]interface{})
+	n.neighbors = getNeighborsFromTopology(n.server.ID(), topology)
+
+	return n.server.Reply(msg, map[string]string{"type": "topology_ok"})
+}
+
+func (n *Node) getStateValues() []interface{} {
+	n.state.rwmu.RLock()
+	defer n.state.rwmu.RUnlock()
+
+	return n.state.set.Values()
+}
+
+func (s *State) appendIfNotExist(msg int) bool {
+	s.rwmu.Lock()
+	defer s.rwmu.Unlock()
+	if s.set.Contains(msg) {
+		s.set.Add(msg)
 		return true
 	} else {
 		return false
