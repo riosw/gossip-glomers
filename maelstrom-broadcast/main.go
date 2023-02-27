@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 var neighbors []string
 var state = hashset.New()
 var mu sync.Mutex
+var rpcTimeout = 500 * time.Millisecond
 
 func main() {
 	n := maelstrom.NewNode()
@@ -32,7 +34,7 @@ func main() {
 		var message int = int(body["message"].(float64))
 
 		if ok := appendIfNotInState(message); !ok {
-			log.Printf("Message %d already exist inside state", message)
+			fmt.Fprintf(os.Stderr, "Message %d already exist inside state", message)
 		}
 		unacked := make([]string, len(neighbors))
 
@@ -44,9 +46,6 @@ func main() {
 
 		// log.Default().Printf("unacked: %v", unacked)
 
-		done := make(chan error)
-
-		start := time.Now()
 		go func() {
 			// log.Default().Printf("Trying sending message %d ... to nodes %v", message, unacked)
 			for len(unacked) > 0 {
@@ -65,9 +64,6 @@ func main() {
 								// Don't retry this anymore
 								unacked = removeElement(unacked, dest, &muUnacked)
 
-								if len(unacked) == 0 {
-									done <- nil
-								}
 							}
 						} else {
 							return fmt.Errorf("WARN: `type` not found on message body")
@@ -76,22 +72,12 @@ func main() {
 						return nil
 					})
 					if err != nil {
-						done <- err
+						log.Fatalf("Unexpected Error on RPC: %v", err)
 					}
 				}
-				time.Sleep(500 * time.Millisecond)
+				time.Sleep(rpcTimeout)
 			}
 		}()
-
-		var err = <-done
-		if err != nil {
-			return err
-		} else {
-			t := time.Now()
-			elapsed := t.Sub(start)
-			log.Default().Printf("Broadcasting message %d to nodes %s takes %s",
-				message, neighbors, elapsed)
-		}
 
 		return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
 	})
@@ -159,8 +145,8 @@ func getNeighborsFromTopology(nodeID string, topology map[string]interface{}) []
 		nodeNeighbors[i] = fmt.Sprint(v)
 	}
 
-	log.Default().Println("Received topology: ", topology)
-	log.Default().Printf("Neighbors of node %s are: %v", nodeID, nodeNeighbors)
+	fmt.Fprintln(os.Stderr, "Received topology: ", topology)
+	fmt.Fprintf(os.Stderr, "Neighbors of node %s are: %v", nodeID, nodeNeighbors)
 
 	return nodeNeighbors
 }
