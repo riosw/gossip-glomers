@@ -15,7 +15,7 @@ import (
 var neighbors []string
 var state = hashset.New()
 var rwmu sync.RWMutex
-var rpcTimeout = 500 * time.Millisecond
+var rpcSleepTime = 250 * time.Millisecond
 
 func main() {
 	n := maelstrom.NewNode()
@@ -75,7 +75,7 @@ func main() {
 						log.Fatalf("Unexpected Error on RPC: %v", err)
 					}
 				}
-				time.Sleep(rpcTimeout)
+				time.Sleep(rpcSleepTime)
 			}
 		}()
 
