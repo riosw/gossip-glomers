@@ -15,7 +15,7 @@ import (
 var neighbors []string
 var state = hashset.New()
 var rwmu sync.RWMutex
-var rpcSleepTime = 250 * time.Millisecond
+var rpcSleepTime = 10000 * time.Millisecond
 
 func main() {
 	n := maelstrom.NewNode()
