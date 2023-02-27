@@ -137,7 +137,7 @@ func (n *Node) getStateValues() []interface{} {
 func (s *State) appendIfNotExist(msg int) bool {
 	s.rwmu.Lock()
 	defer s.rwmu.Unlock()
-	if s.set.Contains(msg) {
+	if !s.set.Contains(msg) {
 		s.set.Add(msg)
 		return true
 	} else {
