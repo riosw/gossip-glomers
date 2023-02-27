@@ -14,7 +14,7 @@ import (
 
 var neighbors []string
 var state = hashset.New()
-var mu sync.Mutex
+var rwmu sync.RWMutex
 var rpcTimeout = 500 * time.Millisecond
 
 func main() {
@@ -90,7 +90,9 @@ func main() {
 		}
 
 		body["type"] = "read_ok"
+		rwmu.RLock()
 		body["messages"] = state.Values()
+		rwmu.RUnlock()
 
 		return n.Reply(msg, body)
 	})
@@ -122,8 +124,8 @@ func appendToState(msg int) {
 }
 
 func appendIfNotInState(msg int) bool {
-	mu.Lock()
-	defer mu.Unlock()
+	rwmu.Lock()
+	defer rwmu.Unlock()
 	if !isInState(msg) {
 		appendToState(msg)
 		return true
