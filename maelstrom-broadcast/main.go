@@ -63,46 +63,39 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 		fmt.Fprintf(os.Stderr, "Message %d already exist inside state\n", message)
 	}
 
-	unacked := make([]string, len(n.neighbors))
-	copy(unacked, n.neighbors)
-
-	var muUnacked sync.Mutex
-	unacked = removeElement(unacked, msg.Src, &muUnacked)
-
 	go func() {
-		for len(unacked) > 0 {
-			for _, dest := range unacked {
-				go func(dest string, msgBody map[string]any) {
-					ctx := context.Background()
-					ctx, cancel := context.WithTimeout(ctx, timeoutDur)
+		for _, dest := range n.neighbors {
+			go func(dest string, msgBody map[string]any) {
+				ctx := context.Background()
+				ctx, cancel := context.WithTimeout(ctx, timeoutDur)
 
-					defer cancel()
-					resp, err := n.server.SyncRPC(ctx, dest, msgBody)
-					if err != nil {
-						if errors.Is(err, context.DeadlineExceeded) {
-							log.Fatalln("TODO: ADD TO QUEUE")
-						}
-						fmt.Fprintf(os.Stderr, "SyncRPC returns unexpected err: %s\n", err)
+				defer cancel()
+				resp, err := n.server.SyncRPC(ctx, dest, msgBody)
+				if err != nil {
+					if errors.Is(err, context.DeadlineExceeded) {
+						log.Fatalln("TODO: ADD TO QUEUE")
 					}
-					var body map[string]any
+					fmt.Fprintf(os.Stderr, "SyncRPC returns unexpected err: %s\n", err)
+				}
+				var body map[string]any
 
-					if err := json.Unmarshal(resp.Body, &body); err != nil {
-						fmt.Fprintf(os.Stderr, "Unmarshal returns err: %s\n", err)
+				if err := json.Unmarshal(resp.Body, &body); err != nil {
+					fmt.Fprintf(os.Stderr, "Unmarshal returns err: %s\n", err)
+				}
+
+				if val, ok := body["type"]; ok {
+					if val != "broadcast_ok" {
+						fmt.Fprintf(os.Stderr, "WARN: Unexpected response type, got: %s\n", val)
+					} else {
+						// Can add debugging statement here
 					}
-
-					if val, ok := body["type"]; ok {
-						if val != "broadcast_ok" {
-							fmt.Fprintf(os.Stderr, "WARN: Unexpected type value, got: %s\n", val)
-						} else {
-							// Don't retry this anymore
-							unacked = removeElement(unacked, dest, &muUnacked)
-
-						}
-					}
-				}(dest, body)
-			}
-			time.Sleep(rpcSleepTime)
+				} else {
+					fmt.Fprintf(os.Stderr, "`type` not found in response body\n")
+				}
+			}(dest, body)
 		}
+		time.Sleep(rpcSleepTime)
+
 	}()
 
 	return n.server.Reply(msg, map[string]string{"type": "broadcast_ok"})
@@ -169,20 +162,4 @@ func getNeighborsFromTopology(nodeID string, topology map[string]interface{}) []
 	fmt.Fprintf(os.Stderr, "Neighbors of node %s are: %v\n", nodeID, nodeNeighbors)
 
 	return nodeNeighbors
-}
-
-func removeElement(slice []string, element string, mu *sync.Mutex) []string {
-	mu.Lock()
-	defer mu.Unlock()
-	index := -1
-	for i, val := range slice {
-		if val == element {
-			index = i
-			break
-		}
-	}
-	if index == -1 {
-		return slice // Element not found
-	}
-	return append(slice[:index], slice[index+1:]...)
 }
