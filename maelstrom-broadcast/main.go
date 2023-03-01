@@ -16,7 +16,7 @@ import (
 )
 
 var rpcSleepTime = 1000 * time.Millisecond
-var timeoutDur = 500 * time.Millisecond
+var timeoutDur = 250 * time.Millisecond
 
 type Node struct {
 	server    *maelstrom.Node
@@ -34,21 +34,74 @@ type RetryQueue struct {
 	nodeID string
 	queue  *aq.Queue
 	mu     *sync.Mutex
+	server *maelstrom.Node
 }
 
 // Returns whether the queue was empty before enqueueing data
-func (rq *RetryQueue) PeekAdd(msg interface{}) (wasEmpty bool) {
+func (rq *RetryQueue) AddRetry(msg interface{}) {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
-	_, ok := rq.queue.Peek()
+	isEmpty := rq.queue.Empty()
 
 	rq.queue.Enqueue(msg)
-	return !ok
+
+	if isEmpty {
+		go rq.RunRetries()
+	}
 }
 
 func (rq *RetryQueue) RunRetries() {
-	// FOO
+	for {
+		rq.mu.Lock()
+		v, ok := rq.queue.Dequeue()
+		rq.mu.Unlock()
+
+		if err := rq.SyncRPCWithRetries(v); err != nil {
+			panic(err)
+		}
+
+		if !ok {
+			fmt.Fprintf(os.Stderr, "RetryQueue is empty, stopping retry loop\n")
+			break
+		}
+	}
+}
+
+// Retries infinitely, assumes eventually message will get through
+func (rq *RetryQueue) SyncRPCWithRetries(msg interface{}) error {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, timeoutDur)
+
+	defer cancel()
+	for {
+		resp, err := rq.server.SyncRPC(ctx, rq.nodeID, msg)
+		// Keep retrying until successful
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				continue
+			}
+			return err
+		}
+		var body map[string]any
+
+		if err := json.Unmarshal(resp.Body, &body); err != nil {
+			return fmt.Errorf("Unmarshal returns err: %s\n", err)
+		}
+
+		if val, ok := body["type"]; ok {
+			if val != "broadcast_ok" {
+				return fmt.Errorf("WARN: Unexpected response type, got: %s\n", val)
+			} else {
+				// Broadcast Successful
+				// Can add log here to inspect how long is needed
+				break
+			}
+		} else {
+			return fmt.Errorf("`type` not found in response body\n")
+		}
+	}
+	return nil
 }
 
 func main() {
@@ -102,10 +155,7 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 				resp, err := n.server.SyncRPC(ctx, dest, msgBody)
 				if err != nil {
 					if errors.Is(err, context.DeadlineExceeded) {
-						wasEmpty := n.mapRQ[dest].PeekAdd(msgBody)
-						if wasEmpty {
-							go n.mapRQ[dest].RunRetries()
-						}
+						n.mapRQ[dest].AddRetry(msgBody)
 					}
 					fmt.Fprintf(os.Stderr, "SyncRPC returns unexpected err: %s\n", err)
 				}
@@ -160,6 +210,7 @@ func (n *Node) topologyHandler(msg maelstrom.Message) error {
 		n.mapRQ[node] = &RetryQueue{
 			nodeID: node,
 			queue:  aq.New(),
+			server: n.server,
 		}
 	}
 
