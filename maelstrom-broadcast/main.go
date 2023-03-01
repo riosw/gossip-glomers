@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	aq "github.com/emirpasic/gods/queues/arrayqueue"
 	"github.com/emirpasic/gods/sets/hashset"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -20,12 +21,27 @@ var timeoutDur = 500 * time.Millisecond
 type Node struct {
 	server    *maelstrom.Node
 	neighbors []string
+	mapRQ     map[string]*RetryQueue
 	state     *State
 }
 
 type State struct {
 	set  *hashset.Set
 	rwmu *sync.RWMutex
+}
+
+type RetryQueue struct {
+	nodeID string
+	queue  *aq.Queue
+	mu     *sync.Mutex
+}
+
+func (rq *RetryQueue) Add(msg int) {
+	rq.mu.Lock()
+	if val, ok := rq.queue.Peek(); ok {
+
+	}
+	defer rq.mu.Unlock()
 }
 
 func main() {
@@ -63,8 +79,13 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 		fmt.Fprintf(os.Stderr, "Message %d already exist inside state\n", message)
 	}
 
+	susceptible := make([]string, len(n.neighbors))
+	copy(susceptible, n.neighbors)
+
+	susceptible = removeElement(susceptible, msg.Src)
+
 	go func() {
-		for _, dest := range n.neighbors {
+		for _, dest := range susceptible {
 			go func(dest string, msgBody map[string]any) {
 				ctx := context.Background()
 				ctx, cancel := context.WithTimeout(ctx, timeoutDur)
@@ -163,4 +184,18 @@ func getNeighborsFromTopology(nodeID string, topology map[string]interface{}) []
 	fmt.Fprintf(os.Stderr, "Neighbors of node %s are: %v\n", nodeID, nodeNeighbors)
 
 	return nodeNeighbors
+}
+
+func removeElement(slice []string, element string) []string {
+	index := -1
+	for i, val := range slice {
+		if val == element {
+			index = i
+			break
+		}
+	}
+	if index == -1 {
+		return slice // Element not found
+	}
+	return append(slice[:index], slice[index+1:]...)
 }
