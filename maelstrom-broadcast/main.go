@@ -24,8 +24,8 @@ type Node struct {
 }
 
 type State struct {
-	set  hashset.Set
-	rwmu sync.RWMutex
+	set  *hashset.Set
+	rwmu *sync.RWMutex
 }
 
 func main() {
@@ -33,7 +33,7 @@ func main() {
 		server:    maelstrom.NewNode(),
 		neighbors: []string{},
 		state: &State{
-			set: *hashset.New(),
+			set: hashset.New(),
 		},
 	}
 
@@ -70,6 +70,7 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 				ctx, cancel := context.WithTimeout(ctx, timeoutDur)
 
 				defer cancel()
+				// The point of this is to avoid
 				resp, err := n.server.SyncRPC(ctx, dest, msgBody)
 				if err != nil {
 					if errors.Is(err, context.DeadlineExceeded) {
