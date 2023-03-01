@@ -109,8 +109,10 @@ func main() {
 		server:    maelstrom.NewNode(),
 		neighbors: []string{},
 		state: &State{
-			set: hashset.New(),
+			set:  hashset.New(),
+			rwmu: &sync.RWMutex{},
 		},
+		mapRQ: make(map[string]*RetryQueue),
 	}
 
 	// TODO: add something like this
@@ -211,6 +213,7 @@ func (n *Node) topologyHandler(msg maelstrom.Message) error {
 			nodeID: node,
 			queue:  aq.New(),
 			server: n.server,
+			mu:     &sync.Mutex{},
 		}
 	}
 
