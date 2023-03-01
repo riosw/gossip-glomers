@@ -56,24 +56,25 @@ func (rq *RetryQueue) RunRetries() {
 		v, ok := rq.queue.Dequeue()
 		rq.mu.Unlock()
 
-		if err := rq.SyncRPCWithRetries(v); err != nil {
-			panic(err)
-		}
-
 		if !ok {
 			fmt.Fprintf(os.Stderr, "RetryQueue is empty, stopping retry loop\n")
 			break
+		}
+
+		if err := rq.SyncRPCWithRetries(v); err != nil {
+			panic(err)
 		}
 	}
 }
 
 // Retries infinitely, assumes eventually message will get through
 func (rq *RetryQueue) SyncRPCWithRetries(msg interface{}) error {
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, timeoutDur)
-
-	defer cancel()
 	for {
+		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(ctx, timeoutDur)
+
+		defer cancel()
+
 		resp, err := rq.server.SyncRPC(ctx, rq.nodeID, msg)
 		// Keep retrying until successful
 		if err != nil {
