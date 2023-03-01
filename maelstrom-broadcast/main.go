@@ -15,7 +15,6 @@ import (
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
-var rpcSleepTime = 1000 * time.Millisecond
 var timeoutDur = 250 * time.Millisecond
 
 type Node struct {
@@ -178,8 +177,6 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 				}
 			}(n, dest, body)
 		}
-		time.Sleep(rpcSleepTime)
-
 	}()
 
 	return n.server.Reply(msg, map[string]string{"type": "broadcast_ok"})
