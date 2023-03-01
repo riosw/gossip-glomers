@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +15,7 @@ import (
 )
 
 var rpcSleepTime = 1000 * time.Millisecond
+var timeoutDur = 500 * time.Millisecond
 
 type Node struct {
 	server    *maelstrom.Node
@@ -69,30 +72,34 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 	go func() {
 		for len(unacked) > 0 {
 			for _, dest := range unacked {
-				err := n.server.RPC(dest, body, func(msg maelstrom.Message) error {
+				go func(dest string, msgBody map[string]any) {
+					ctx := context.Background()
+					ctx, cancel := context.WithTimeout(ctx, timeoutDur)
+
+					defer cancel()
+					resp, err := n.server.SyncRPC(ctx, dest, msgBody)
+					if err != nil {
+						if errors.Is(err, context.DeadlineExceeded) {
+							log.Fatalln("TODO: ADD TO QUEUE")
+						}
+						fmt.Fprintf(os.Stderr, "SyncRPC returns unexpected err: %s\n", err)
+					}
 					var body map[string]any
 
-					if err := json.Unmarshal(msg.Body, &body); err != nil {
-						return err
+					if err := json.Unmarshal(resp.Body, &body); err != nil {
+						fmt.Fprintf(os.Stderr, "Unmarshal returns err: %s\n", err)
 					}
 
 					if val, ok := body["type"]; ok {
 						if val != "broadcast_ok" {
-							return fmt.Errorf("WARN: Unexpected type value, got: %s\n", val)
+							fmt.Fprintf(os.Stderr, "WARN: Unexpected type value, got: %s\n", val)
 						} else {
 							// Don't retry this anymore
 							unacked = removeElement(unacked, dest, &muUnacked)
 
 						}
-					} else {
-						return fmt.Errorf("WARN: `type` not found on message body\n")
 					}
-
-					return nil
-				})
-				if err != nil {
-					log.Fatalf("Unexpected Error on RPC: %v", err)
-				}
+				}(dest, body)
 			}
 			time.Sleep(rpcSleepTime)
 		}
