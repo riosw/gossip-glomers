@@ -36,12 +36,19 @@ type RetryQueue struct {
 	mu     *sync.Mutex
 }
 
-func (rq *RetryQueue) Add(msg int) {
+// Returns whether the queue was empty before enqueueing data
+func (rq *RetryQueue) PeekAdd(msg interface{}) (wasEmpty bool) {
 	rq.mu.Lock()
-	if val, ok := rq.queue.Peek(); ok {
-
-	}
 	defer rq.mu.Unlock()
+
+	_, ok := rq.queue.Peek()
+
+	rq.queue.Enqueue(msg)
+	return !ok
+}
+
+func (rq *RetryQueue) RunRetries() {
+	// FOO
 }
 
 func main() {
@@ -86,16 +93,19 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 
 	go func() {
 		for _, dest := range susceptible {
-			go func(dest string, msgBody map[string]any) {
+			go func(n *Node, dest string, msgBody map[string]any) {
 				ctx := context.Background()
 				ctx, cancel := context.WithTimeout(ctx, timeoutDur)
 
 				defer cancel()
-				// The point of this is to avoid
+				// The point of this is to avoid waiting for the queue
 				resp, err := n.server.SyncRPC(ctx, dest, msgBody)
 				if err != nil {
 					if errors.Is(err, context.DeadlineExceeded) {
-						log.Fatalln("TODO: ADD TO QUEUE")
+						wasEmpty := n.mapRQ[dest].PeekAdd(msgBody)
+						if wasEmpty {
+							go n.mapRQ[dest].RunRetries()
+						}
 					}
 					fmt.Fprintf(os.Stderr, "SyncRPC returns unexpected err: %s\n", err)
 				}
@@ -114,7 +124,7 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 				} else {
 					fmt.Fprintf(os.Stderr, "`type` not found in response body\n")
 				}
-			}(dest, body)
+			}(n, dest, body)
 		}
 		time.Sleep(rpcSleepTime)
 
@@ -145,6 +155,13 @@ func (n *Node) topologyHandler(msg maelstrom.Message) error {
 
 	var topology = body["topology"].(map[string]interface{})
 	n.neighbors = getNeighborsFromTopology(n.server.ID(), topology)
+
+	for _, node := range n.neighbors {
+		n.mapRQ[node] = &RetryQueue{
+			nodeID: node,
+			queue:  aq.New(),
+		}
+	}
 
 	return n.server.Reply(msg, map[string]string{"type": "topology_ok"})
 }
