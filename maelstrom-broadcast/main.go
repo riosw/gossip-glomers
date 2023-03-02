@@ -31,26 +31,38 @@ type State struct {
 }
 
 type RetryQueue struct {
-	nodeID string
-	queue  *aq.Queue
-	mu     *sync.Mutex
-	server *maelstrom.Node
+	nodeID    string
+	queue     *aq.Queue
+	mu        *sync.Mutex
+	server    *maelstrom.Node
+	ackedMsgs *AckedMsgs
+	// having ackedMsgs here is structurally improper
+	// as this is used outside RetryQueue, but have to do for now
+}
+
+// This lists all seen messages that has been acked by a certain neighboring node
+type AckedMsgs struct {
+	mu  *sync.Mutex
+	set map[int]struct{}
 }
 
 // Returns whether the queue was empty before enqueueing data
-func (rq *RetryQueue) AddRetry(msg interface{}) {
+func (rq *RetryQueue) AddRetry(msgBody interface{}) {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
 	isEmpty := rq.queue.Empty()
 
-	rq.queue.Enqueue(msg)
+	rq.queue.Enqueue(msgBody)
 
 	if isEmpty {
 		go rq.RunRetries()
 	}
 }
 
+// Run Retry sending message to node rq.nodeID.
+//
+// Called by AddRetry when the queue starts as empty
 func (rq *RetryQueue) RunRetries() {
 	for {
 		rq.mu.Lock()
@@ -69,17 +81,21 @@ func (rq *RetryQueue) RunRetries() {
 }
 
 // Retries infinitely, assumes eventually message will get through
-func (rq *RetryQueue) SyncRPCWithRetries(msg interface{}) error {
-	// Try time it here: Somehow, the acknowledgement had weird behavior
-	// Resulting message with same values to keep trying to be broadcasted
-	// Even though it seems that a response of broadcast_ok has been received
+func (rq *RetryQueue) SyncRPCWithRetries(msgBody interface{}) error {
+	t := time.Now()
+	defer func() {
+		fmt.Fprintf(os.Stderr, "Sending msg %v to %s took %s\n", msgBody, rq.nodeID, time.Now().Sub(t))
+	}()
+
+	var message int = extractMessageFromBody(msgBody.(map[string]any))
+
 	for {
 		ctx := context.Background()
 		ctx, cancel := context.WithTimeout(ctx, retryTimeout)
 
 		defer cancel()
 
-		resp, err := rq.server.SyncRPC(ctx, rq.nodeID, msg)
+		resp, err := rq.server.SyncRPC(ctx, rq.nodeID, msgBody)
 		// Keep retrying until successful
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -94,18 +110,33 @@ func (rq *RetryQueue) SyncRPCWithRetries(msg interface{}) error {
 		}
 
 		if val, ok := body["type"]; ok {
-			if val != "broadcast_ok" {
-				return fmt.Errorf("WARN: Unexpected response type, got: %s\n", val)
-			} else {
-				// Broadcast Successful
-				// Can add log here to inspect how long is needed
+			if val == "broadcast_ok" {
+				rq.addAcked(message)
 				break
+			} else {
+				return fmt.Errorf("WARN: Unexpected response type, got: %s\n", val)
 			}
 		} else {
 			return fmt.Errorf("`type` not found in response body\n")
 		}
 	}
 	return nil
+}
+
+// Check if msg has been acked by rq.nodeID
+//
+// Returns true if was Acked, false if yet to be acked
+func (rq *RetryQueue) isAcked(msg int) bool {
+	rq.ackedMsgs.mu.Lock()
+	defer rq.ackedMsgs.mu.Unlock()
+	_, ok := rq.ackedMsgs.set[msg]
+	return ok
+}
+
+func (rq *RetryQueue) addAcked(msg int) {
+	rq.ackedMsgs.mu.Lock()
+	rq.ackedMsgs.set[msg] = struct{}{}
+	defer rq.ackedMsgs.mu.Unlock()
 }
 
 func main() {
@@ -139,9 +170,9 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &body); err != nil {
 		return err
 	}
-	var message int = int(body["message"].(float64))
+	var message int = extractMessageFromBody(body)
 
-	if ok := n.state.appendIfNotExist(message); !ok {
+	if ok := n.state.addIfNotExist(message); !ok {
 		fmt.Fprintf(os.Stderr, "Message %d already exist inside state\n", message)
 	}
 
@@ -153,6 +184,10 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 	go func() {
 		for _, dest := range susceptible {
 			go func(n *Node, dest string, msgBody map[string]any) {
+				if ok := n.mapRQ[dest].isAcked(message); ok {
+					// Skip if this message has been acked previously
+					return
+				}
 				ctx := context.Background()
 				ctx, cancel := context.WithTimeout(ctx, firstTryTimeout)
 
@@ -174,10 +209,10 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 				}
 
 				if val, ok := body["type"]; ok {
-					if val != "broadcast_ok" {
-						fmt.Fprintf(os.Stderr, "WARN: Unexpected response type, got: %s\n", val)
+					if val == "broadcast_ok" {
+						n.mapRQ[dest].addAcked(message)
 					} else {
-						// Can add debugging statement here
+						fmt.Fprintf(os.Stderr, "WARN: Unexpected response type, got: %s\n", val)
 					}
 				} else {
 					fmt.Fprintf(os.Stderr, "`type` not found in response body\n")
@@ -218,6 +253,10 @@ func (n *Node) topologyHandler(msg maelstrom.Message) error {
 			queue:  aq.New(),
 			server: n.server,
 			mu:     &sync.Mutex{},
+			ackedMsgs: &AckedMsgs{
+				&sync.Mutex{},
+				make(map[int]struct{}),
+			},
 		}
 	}
 
@@ -231,7 +270,7 @@ func (n *Node) getStateValues() []interface{} {
 	return n.state.set.Values()
 }
 
-func (s *State) appendIfNotExist(msg int) bool {
+func (s *State) addIfNotExist(msg int) bool {
 	s.rwmu.Lock()
 	defer s.rwmu.Unlock()
 	if !s.set.Contains(msg) {
@@ -273,4 +312,8 @@ func removeElement(slice []string, element string) []string {
 		return slice // Element not found
 	}
 	return append(slice[:index], slice[index+1:]...)
+}
+
+func extractMessageFromBody(body map[string]interface{}) int {
+	return int(body["message"].(float64))
 }
