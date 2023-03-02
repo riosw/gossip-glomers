@@ -19,7 +19,7 @@ func TestTopologyType(t *testing.T) {
 
 	var topology = body["topology"].(map[string]interface{})
 
-	neighbors = getNeighborsFromTopology("n0", topology)
+	neighbors := getNeighborsFromTopology("n0", topology)
 
 	assert.Equal(t, []string{"n3", "n1"}, neighbors)
 
