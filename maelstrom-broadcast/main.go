@@ -15,7 +15,8 @@ import (
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
-var timeoutDur = 250 * time.Millisecond
+var retryTimeout = 250 * time.Millisecond
+var firstTryTimeout = 500 * time.Millisecond
 
 type Node struct {
 	server    *maelstrom.Node
@@ -69,9 +70,12 @@ func (rq *RetryQueue) RunRetries() {
 
 // Retries infinitely, assumes eventually message will get through
 func (rq *RetryQueue) SyncRPCWithRetries(msg interface{}) error {
+	// Try time it here: Somehow, the acknowledgement had weird behavior
+	// Resulting message with same values to keep trying to be broadcasted
+	// Even though it seems that a response of broadcast_ok has been received
 	for {
 		ctx := context.Background()
-		ctx, cancel := context.WithTimeout(ctx, timeoutDur)
+		ctx, cancel := context.WithTimeout(ctx, retryTimeout)
 
 		defer cancel()
 
@@ -150,7 +154,7 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 		for _, dest := range susceptible {
 			go func(n *Node, dest string, msgBody map[string]any) {
 				ctx := context.Background()
-				ctx, cancel := context.WithTimeout(ctx, timeoutDur)
+				ctx, cancel := context.WithTimeout(ctx, firstTryTimeout)
 
 				defer cancel()
 				// The point of this is to avoid waiting for the queue
@@ -158,8 +162,10 @@ func (n *Node) broadcastHandler(msg maelstrom.Message) error {
 				if err != nil {
 					if errors.Is(err, context.DeadlineExceeded) {
 						n.mapRQ[dest].AddRetry(msgBody)
+						return
+					} else {
+						fmt.Fprintf(os.Stderr, "SyncRPC returns unexpected err: %s\n", err)
 					}
-					fmt.Fprintf(os.Stderr, "SyncRPC returns unexpected err: %s\n", err)
 				}
 				var body map[string]any
 
