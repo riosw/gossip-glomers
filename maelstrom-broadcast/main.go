@@ -84,7 +84,7 @@ func (rq *RetryQueue) RunRetries() {
 func (rq *RetryQueue) SyncRPCWithRetries(msgBody interface{}) error {
 	t := time.Now()
 	defer func() {
-		fmt.Fprintf(os.Stderr, "Sending msg %v to %s took %s\n", msgBody, rq.nodeID, time.Now().Sub(t))
+		fmt.Fprintf(os.Stderr, "Sending msg %v to %s took %s\n", msgBody, rq.nodeID, time.Since(t))
 	}()
 
 	var message int = extractMessageFromBody(msgBody.(map[string]any))
@@ -106,7 +106,7 @@ func (rq *RetryQueue) SyncRPCWithRetries(msgBody interface{}) error {
 		var body map[string]any
 
 		if err := json.Unmarshal(resp.Body, &body); err != nil {
-			return fmt.Errorf("Unmarshal returns err: %s\n", err)
+			return fmt.Errorf("unmarshal returns err: %s", err)
 		}
 
 		if val, ok := body["type"]; ok {
@@ -114,10 +114,10 @@ func (rq *RetryQueue) SyncRPCWithRetries(msgBody interface{}) error {
 				rq.addAcked(message)
 				break
 			} else {
-				return fmt.Errorf("WARN: Unexpected response type, got: %s\n", val)
+				return fmt.Errorf("WARN: Unexpected response type, got: %s", val)
 			}
 		} else {
-			return fmt.Errorf("`type` not found in response body\n")
+			return fmt.Errorf("`type` not found in response body")
 		}
 	}
 	return nil
