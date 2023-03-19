@@ -21,3 +21,7 @@ func New() *Server {
 func (s *Server) Add(delta int) error {
 	return nil
 }
+
+func (s *Server) Read() (int, error) {
+	return 42, nil
+}
