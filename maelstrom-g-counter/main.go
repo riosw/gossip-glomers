@@ -18,7 +18,7 @@ func main() {
 			return err
 		}
 
-		var delta int = body["delta"].(int)
+		var delta int = int(body["delta"].(float64))
 		err := s.Add(delta)
 		if err != nil {
 			return err
