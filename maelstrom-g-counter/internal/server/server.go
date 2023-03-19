@@ -10,6 +10,7 @@ type Server struct {
 	Node         *maelstrom.Node
 	kv           *maelstrom.KV
 	localCounter int
+	nodeIDs      []string
 }
 
 func New() *Server {
@@ -37,9 +38,22 @@ func (s *Server) Add(delta int) error {
 }
 
 func (s *Server) Read() (int, error) {
-	globalCounter, err := s.kv.ReadInt(context.TODO(), s.Node.ID())
-	if err != nil {
-		return 0, err
+	var globalCounter int = 0
+	for _, nodeID := range s.nodeIDs {
+		val, err := s.kv.ReadInt(context.TODO(), nodeID)
+		if err != nil {
+			return 0, err
+		}
+		globalCounter += val
 	}
+
 	return globalCounter, nil
+}
+
+func (s *Server) SetNodeIDs(nodeIDs []interface{}) error {
+	s.nodeIDs = make([]string, len(nodeIDs))
+	for i, nodeID := range nodeIDs {
+		s.nodeIDs[i] = nodeID.(string)
+	}
+	return nil
 }

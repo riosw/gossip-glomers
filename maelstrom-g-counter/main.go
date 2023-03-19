@@ -45,6 +45,18 @@ func main() {
 				"value": value})
 	})
 
+	// Initialize NodeIDs to determine nodes to be read from maelstrom.KV
+	s.Node.Handle("init", func(msg maelstrom.Message) error {
+		var body map[string]any
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return err
+		}
+
+		s.SetNodeIDs(body["node_ids"].([]interface{}))
+
+		return nil
+	})
+
 	if err := s.Node.Run(); err != nil {
 		log.Fatal(err)
 	}
