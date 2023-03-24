@@ -42,8 +42,13 @@ func (s *Server) Read() (int, error) {
 	for _, nodeID := range s.nodeIDs {
 		val, err := s.kv.ReadInt(context.TODO(), nodeID)
 		if err != nil {
-			return 0, err
+			if err.(*maelstrom.RPCError).Code == maelstrom.KeyDoesNotExist {
+				val = 0
+			} else {
+				return 0, err
+			}
 		}
+
 		globalCounter += val
 	}
 
