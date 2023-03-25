@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -11,6 +12,7 @@ type Server struct {
 	kv           *maelstrom.KV
 	localCounter int
 	nodeIDs      []string
+	localMutex   *sync.Mutex
 }
 
 func New() *Server {
@@ -20,14 +22,17 @@ func New() *Server {
 		Node:         node,
 		kv:           kv,
 		localCounter: 0,
+		localMutex:   &sync.Mutex{},
 	}
 }
 
 func (s *Server) Add(delta int) error {
 	ctx := context.TODO()
+	s.localMutex.Lock()
 	oldLocalCounter := s.localCounter
 	s.localCounter += delta
 	err := s.kv.CompareAndSwap(ctx, s.Node.ID(), oldLocalCounter, s.localCounter, true)
+	s.localMutex.Unlock()
 	if err != nil {
 		if err.(*maelstrom.RPCError).Code == maelstrom.PreconditionFailed {
 			s.Add(delta)
